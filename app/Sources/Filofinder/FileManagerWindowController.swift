@@ -784,7 +784,8 @@ final class FileManagerWindowController: NSWindowController, NSWindowDelegate, N
     /// While a text field (the filter) is being edited, the Edit
     /// menu's ⌘C ⌘X ⌘V ⌘A ⌘Z act on its text, not on files.
     /// (Menu invocations only: toolbar buttons keep acting on files.)
-    private var textEditor: NSTextView? { window?.firstResponder as? NSTextView }
+    /// The field editor of whatever text field has focus: in this window, or in its sheet (Go to Folder), which is the key window while it is up.
+    private var textEditor: NSTextView? { (window?.attachedSheet ?? window)?.firstResponder as? NSTextView }
 
     @objc func copyItems(_ sender: Any?) { if sender is NSMenuItem, let t = textEditor { t.copy(sender); return }; if let p = requireSelection() { ops.copy(p); panel.reloadVisible(); toolbar.update() } }
     @objc func cutItems(_ sender: Any?) { if sender is NSMenuItem, let t = textEditor { t.cut(sender); return }; if let p = requireSelection() { ops.cut(p); leftPane.panel.reloadVisible(); rightPane.panel.reloadVisible(); toolbar.update() } }
