@@ -32,9 +32,9 @@ enum MainMenu {
         let edit = NSMenu(title: "Edit")
         edit.addItem(withTitle: "Undo", action: #selector(FM.undoAction(_:)), keyEquivalent: "z")
         edit.addItem(.separator())
-        edit.addItem(withTitle: "Cut", action: #selector(FM.cutItems(_:)), keyEquivalent: "x")
-        edit.addItem(withTitle: "Copy", action: #selector(FM.copyItems(_:)), keyEquivalent: "c")
-        edit.addItem(withTitle: "Paste", action: #selector(FM.pasteItems(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         let copyPath = NSMenuItem(title: "Copy Path", action: #selector(FM.copyPathAction(_:)), keyEquivalent: "c")
         copyPath.keyEquivalentModifierMask = [.command, .option]
         edit.addItem(copyPath)

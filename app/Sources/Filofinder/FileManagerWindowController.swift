@@ -787,6 +787,11 @@ final class FileManagerWindowController: NSWindowController, NSWindowDelegate, N
     /// The field editor of whatever text field has focus: in this window, or in its sheet (Go to Folder), which is the key window while it is up.
     private var textEditor: NSTextView? { (window?.attachedSheet ?? window)?.firstResponder as? NSTextView }
 
+    /// The Edit menu sends the standard copy:/cut:/paste: (nil target), so a focused text field's field editor handles them first, including in the Go to Folder sheet, whose responder chain never reaches this controller. Only when no text field takes them do they arrive here and act on files.
+    @objc(copy:) func copyAction(_ sender: Any?) { copyItems(sender) }
+    @objc(cut:) func cutAction(_ sender: Any?) { cutItems(sender) }
+    @objc(paste:) func pasteAction(_ sender: Any?) { pasteItems(sender) }
+
     @objc func copyItems(_ sender: Any?) { if sender is NSMenuItem, let t = textEditor { t.copy(sender); return }; if let p = requireSelection() { ops.copy(p); panel.reloadVisible(); toolbar.update() } }
     @objc func cutItems(_ sender: Any?) { if sender is NSMenuItem, let t = textEditor { t.cut(sender); return }; if let p = requireSelection() { ops.cut(p); leftPane.panel.reloadVisible(); rightPane.panel.reloadVisible(); toolbar.update() } }
     @objc func pasteItems(_ sender: Any?) { if sender is NSMenuItem, let t = textEditor { t.paste(sender); return }; if requireRealFolder() { ops.paste(into: activeTab.path) } }
@@ -1288,8 +1293,8 @@ final class FileManagerWindowController: NSWindowController, NSWindowDelegate, N
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if let t = textEditor {
             switch item.action {
-            case #selector(copyItems(_:)), #selector(cutItems(_:)): return t.selectedRange.length > 0
-            case #selector(pasteItems(_:)), #selector(selectAllItems(_:)): return true
+            case #selector(copyItems(_:)), #selector(cutItems(_:)), #selector(copyAction(_:)), #selector(cutAction(_:)): return t.selectedRange.length > 0
+            case #selector(pasteItems(_:)), #selector(pasteAction(_:)), #selector(selectAllItems(_:)): return true
             case #selector(undoAction(_:)): item.title = "Undo"; return t.undoManager?.canUndo ?? false
             default: break
             }
@@ -1305,12 +1310,12 @@ final class FileManagerWindowController: NSWindowController, NSWindowDelegate, N
         case #selector(togglePreview(_:)): item.state = showPreview ? .on : .off
         case #selector(setListView(_:)): item.state = viewMode == .list ? .on : .off
         case #selector(setGridView(_:)): item.state = viewMode == .grid ? .on : .off
-        case #selector(pasteItems(_:)): return ops.canPaste && !ops.busy
+        case #selector(pasteItems(_:)), #selector(pasteAction(_:)): return ops.canPaste && !ops.busy
         case #selector(undoAction(_:)):
             item.title = ops.undoTitle.map { "Undo \($0)" } ?? "Undo"
             return ops.canUndo
         case #selector(redoAction(_:)): return false
-        case #selector(copyItems(_:)), #selector(cutItems(_:)), #selector(moveToBin(_:)),
+        case #selector(copyItems(_:)), #selector(cutItems(_:)), #selector(copyAction(_:)), #selector(cutAction(_:)), #selector(moveToBin(_:)),
              #selector(deletePermanently(_:)), #selector(duplicateItems(_:)):
             return !activeTab.selection.isEmpty && !ops.busy
         case #selector(renameItem(_:)): return activeTab.selection.count == 1 && !ops.busy
