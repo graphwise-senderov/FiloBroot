@@ -69,6 +69,8 @@ pub enum FfiError {
     /// Moving/copying a folder into itself.
     IntoItself { message: String },
     InvalidName { message: String },
+    /// The user cancelled. Partial destination data was removed.
+    Cancelled,
 }
 
 impl std::fmt::Display for FfiError {
@@ -77,18 +79,19 @@ impl std::fmt::Display for FfiError {
             Self::Io { message } | Self::Exists { message } | Self::IntoItself { message } | Self::InvalidName { message } => {
                 f.write_str(message)
             }
+            Self::Cancelled => f.write_str("Cancelled"),
         }
     }
 }
 
 impl From<core::ops::OpError> for FfiError {
     fn from(e: core::ops::OpError) -> Self {
-        let message = e.to_string();
-        match e {
-            core::ops::OpError::Exists(_) => Self::Exists { message },
-            core::ops::OpError::IntoItself(_) => Self::IntoItself { message },
-            core::ops::OpError::InvalidName(_) => Self::InvalidName { message },
-            core::ops::OpError::Io(..) => Self::Io { message },
+        match &e {
+            core::ops::OpError::Exists(_) => Self::Exists { message: e.to_string() },
+            core::ops::OpError::IntoItself(_) => Self::IntoItself { message: e.to_string() },
+            core::ops::OpError::InvalidName(_) => Self::InvalidName { message: e.to_string() },
+            core::ops::OpError::Io(..) => Self::Io { message: e.to_string() },
+            core::ops::OpError::Cancelled => Self::Cancelled,
         }
     }
 }
@@ -353,10 +356,48 @@ pub fn copy_item(src: String, dest_dir: String, name: String) -> Result<String, 
     Ok(core::ops::copy_item(Path::new(&src), Path::new(&dest_dir), &name)?.to_string_lossy().into_owned())
 }
 
+/// Byte progress for one copy or move. Invoked on the caller’s thread (the app calls it off the main thread).
+/// `total == 0` means the size is still being measured. Return `false` to cancel.
+#[uniffi::export(foreign)]
+pub trait ByteProgress: Send + Sync {
+    fn on_bytes(&self, copied: u64, total: u64, current_file: String) -> bool;
+}
+
+/// [`copy_item`] plus byte progress. `progress` is called while measuring and while copying.
+#[uniffi::export]
+pub fn copy_item_with_progress(
+    src: String,
+    dest_dir: String,
+    name: String,
+    progress: std::sync::Arc<dyn ByteProgress>,
+) -> Result<String, FfiError> {
+    Ok(core::ops::copy_item_reporting(Path::new(&src), Path::new(&dest_dir), &name, &|copied, total, file| {
+        progress.on_bytes(copied, total, file.to_string())
+    })?
+    .to_string_lossy()
+    .into_owned())
+}
+
 /// Moves `src` into `dest_dir` as `name`; never overwrites. Returns the new path.
 #[uniffi::export]
 pub fn move_item(src: String, dest_dir: String, name: String) -> Result<String, FfiError> {
     Ok(core::ops::move_item(Path::new(&src), Path::new(&dest_dir), &name)?.to_string_lossy().into_owned())
+}
+
+/// [`move_item`] plus byte progress. Same-volume moves report completion immediately;
+/// cross-volume moves report the copy.
+#[uniffi::export]
+pub fn move_item_with_progress(
+    src: String,
+    dest_dir: String,
+    name: String,
+    progress: std::sync::Arc<dyn ByteProgress>,
+) -> Result<String, FfiError> {
+    Ok(core::ops::move_item_reporting(Path::new(&src), Path::new(&dest_dir), &name, &|copied, total, file| {
+        progress.on_bytes(copied, total, file.to_string())
+    })?
+    .to_string_lossy()
+    .into_owned())
 }
 
 #[uniffi::export]

@@ -1276,7 +1276,8 @@ final class FileManagerWindowController: NSWindowController, NSWindowDelegate, N
         case (125, [.command]): openSelection(); return true                        // ⌘↓
         case (96, []): refresh(nil); return true                                    // F5
         case (120, []): renameItem(nil); return true                                // F2
-        case (53, []):                                                              // Esc: clear filter, else selection
+        case (53, []):                                                              // Esc: cancel a copy or move, else clear filter, else selection
+            if ops.cancelTransfer() { return true }
             if !activeTab.query.isEmpty { setQuery(""); return true }
             activeTab.selection = []; panel.applySelection(); selectionDidChange(); return true
         case (49, []): quickLook.toggle(); return true                              // Space = Quick Look

@@ -25,6 +25,8 @@ final class FileOps {
     private(set) var clipboard: Clipboard?
     private(set) var undoStack: [(title: String, op: Undo)] = []
     private(set) var busy = false
+    /// The copy/move panel, while one is on screen. Escape cancels it.
+    private var activeTransfer: TransferProgress?
     private let queue = DispatchQueue(label: "app.filofinder.jobs", qos: .userInitiated)
     private unowned let fm: FileManagerWindowController
 
@@ -140,13 +142,15 @@ final class FileOps {
     private func runPaste(_ sources: [String], mode: Mode, dest: String, resolution: Resolution, conflicts: Set<String>,
                           done: (() -> Void)?) {
         let verb = mode == .cut ? "Moving" : "Copying"
-        run(verb, total: sources.count) { progress in
+        let ui = beginTransfer(mode == .cut ? .move : .copy, source: sources.first)
+        run(verb, total: sources.count) { _ in
             var moved: [(String, String)] = []
             var created: [String] = []
             var replacedTrash: [(String, String)] = []
             var errors: [String] = []
+            var cancelled = false
             for (i, src) in sources.enumerated() {
-                progress(i)
+                if ui.isCancelled { cancelled = true; break }
                 var name = (src as NSString).lastPathComponent
                 if conflicts.contains(src) {
                     switch resolution {
@@ -170,25 +174,31 @@ final class FileOps {
                     name = uniqueName(dir: dest, name: name) // duplicate in place
                 }
                 do {
-                    if mode == .cut {
-                        let to = try moveItem(src: src, destDir: dest, name: name)
-                        moved.append((src, to))
-                    } else {
-                        created.append(try copyItem(src: src, destDir: dest, name: name))
-                    }
+                    let to = try transferOne(src: src, destDir: dest, name: name, move: mode == .cut,
+                                             ui: ui, index: i + 1, count: sources.count)
+                    if mode == .cut { moved.append((src, to)) } else { created.append(to) }
                 } catch {
+                    if isTransferCancellation(error) { cancelled = true; break }
                     errors.append("\(error)")
                 }
             }
             let landed = (moved.map { $0.1 } + created).map { ($0 as NSString).lastPathComponent }
+            let summary: String?
+            if cancelled {
+                summary = landed.isEmpty ? nil : "Stopped — \(mode == .cut ? "moved" : "copied") \(count(landed.count))"
+            } else {
+                summary = "\(mode == .cut ? "Moved" : "Copied") \(count(landed.count))"
+                    + (replacedTrash.isEmpty ? "" : " · replaced \(replacedTrash.count) (in Trash)")
+            }
             return Outcome(
                 undo: mode == .cut ? (moved.isEmpty ? nil : ("Move", .moved(moved)))
                                    : (created.isEmpty ? nil : ("Copy", .created(created))),
                 select: landed,
                 errors: errors,
-                summary: "\(mode == .cut ? "Moved" : "Copied") \(count(landed.count))"
-                    + (replacedTrash.isEmpty ? "" : " · replaced \(replacedTrash.count) (in Trash)"))
-        } done: {
+                summary: summary,
+                cancelled: cancelled)
+        } done: { [weak self] in
+            self?.endTransfer()
             done?()
         }
     }
@@ -208,19 +218,31 @@ final class FileOps {
     }
 
     func duplicate(_ paths: [String]) {
-        run("Duplicating", total: paths.count) { progress in
+        let ui = beginTransfer(.duplicate, source: paths.first)
+        run("Duplicating", total: paths.count) { _ in
             var created: [String] = []
             var errors: [String] = []
+            var cancelled = false
             for (i, src) in paths.enumerated() {
-                progress(i)
+                if ui.isCancelled { cancelled = true; break }
                 let dir = (src as NSString).deletingLastPathComponent
+                let name = uniqueName(dir: dir, name: (src as NSString).lastPathComponent)
                 do {
-                    created.append(try copyItem(src: src, destDir: dir, name: uniqueName(dir: dir, name: (src as NSString).lastPathComponent)))
-                } catch { errors.append("\(error)") }
+                    created.append(try transferOne(src: src, destDir: dir, name: name, move: false,
+                                                   ui: ui, index: i + 1, count: paths.count))
+                } catch {
+                    if isTransferCancellation(error) { cancelled = true; break }
+                    errors.append("\(error)")
+                }
             }
+            let summary = cancelled
+                ? (created.isEmpty ? nil : "Stopped — duplicated \(count(created.count))")
+                : "Duplicated \(count(created.count))"
             return Outcome(undo: created.isEmpty ? nil : ("Duplicate", .created(created)),
                            select: created.map { ($0 as NSString).lastPathComponent }, errors: errors,
-                           summary: "Duplicated \(count(created.count))")
+                           summary: summary, cancelled: cancelled)
+        } done: { [weak self] in
+            self?.endTransfer()
         }
     }
 
@@ -435,15 +457,42 @@ final class FileOps {
         var errors: [String]
         var summary: String?
         var renameAfter: String? = nil
+        var cancelled = false
+    }
+
+    /// Puts the progress panel up before `run` hops to the job queue, so a multi-GB
+    /// copy is not silent while the first byte is still being measured.
+    private func beginTransfer(_ kind: TransferProgress.Kind, source: String?) -> TransferProgress {
+        dispatchPrecondition(condition: .onQueue(.main))
+        let ui = TransferProgress(kind: kind)
+        ui.onStatus = { [weak self] text in self?.fm.setActivity(text) }
+        ui.show(over: fm.window, source: source.map { URL(fileURLWithPath: $0) })
+        activeTransfer = ui
+        return ui
+    }
+
+    private func endTransfer() {
+        activeTransfer?.close()
+        activeTransfer = nil
+    }
+
+    /// Escape while a copy or move panel is up.
+    func cancelTransfer() -> Bool {
+        guard let activeTransfer, !activeTransfer.isCancelled else { return false }
+        activeTransfer.cancel()
+        return true
     }
 
     private func run(_ verb: String, total: Int, work: @escaping (_ progress: @escaping (Int) -> Void) -> Outcome,
                      done: (() -> Void)? = nil) {
         busy = true
-        fm.setActivity(total > 1 ? "\(verb) 0 of \(total)…" : "\(verb)…")
+        // A transfer panel already published "Preparing…"; don't replace it with a bare "Copying…".
+        if activeTransfer == nil {
+            fm.setActivity(total > 1 ? "\(verb) 0 of \(total)…" : "\(verb)…")
+        }
         queue.async { [weak self] in
             let outcome = work { i in
-                guard total > 1 else { return }
+                guard self?.activeTransfer == nil, total > 1 else { return }
                 DispatchQueue.main.async { self?.fm.setActivity("\(verb) \(i + 1) of \(total)…") }
             }
             DispatchQueue.main.async {
@@ -453,8 +502,13 @@ final class FileOps {
                 done?()
                 self.fm.setActivity(nil)
                 self.fm.operationFinished(select: outcome.select)
-                if let s = outcome.summary, outcome.errors.isEmpty { UI.hud(s, in: self.fm.window) }
-                if !outcome.errors.isEmpty { self.showErrors(outcome.errors) }
+                if !outcome.errors.isEmpty {
+                    self.showErrors(outcome.errors)
+                } else if outcome.cancelled {
+                    UI.hud(outcome.summary ?? "Cancelled", in: self.fm.window)
+                } else if let s = outcome.summary {
+                    UI.hud(s, in: self.fm.window)
+                }
                 if let r = outcome.renameAfter { self.rename(r) }
             }
         }
@@ -472,4 +526,19 @@ final class FileOps {
 
 private func count(_ n: Int) -> String {
     n == 1 ? "1 item" : "\(n.formatted()) items"
+}
+
+/// Free function so the job closure does not retain FileOps (and, through it, the window).
+private func transferOne(src: String, destDir: String, name: String, move: Bool,
+                         ui: TransferProgress, index: Int, count: Int) throws -> String {
+    let sink = TransferItemProgress(ui: ui, index: index, count: count, itemName: (src as NSString).lastPathComponent)
+    if move {
+        return try moveItemWithProgress(src: src, destDir: destDir, name: name, progress: sink)
+    }
+    return try copyItemWithProgress(src: src, destDir: destDir, name: name, progress: sink)
+}
+
+private func isTransferCancellation(_ error: Error) -> Bool {
+    if let ffi = error as? FfiError, case .Cancelled = ffi { return true }
+    return false
 }
