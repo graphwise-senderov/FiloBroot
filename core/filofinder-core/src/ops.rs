@@ -195,8 +195,8 @@ pub fn move_item(src: &Path, dest_dir: &Path, name: &str) -> OpResult<PathBuf> {
     move_item_reporting(src, dest_dir, name, &|_, _, _| true)
 }
 
-/// Same as [`move_item`]. A same-volume move is one rename and reports `(1, 1)` when it
-/// finishes. A cross-volume move reports copy progress, then deletes the source.
+/// Same as [`move_item`]. A same-volume move is one rename and does not report a byte
+/// count. A cross-volume move reports the copy, then deletes the source.
 pub fn move_item_reporting(
     src: &Path,
     dest_dir: &Path,
@@ -208,7 +208,6 @@ pub fn move_item_reporting(
     let target = dest_dir.join(name);
     if same_device(src, dest_dir)? {
         rename_excl(src, &target)?;
-        let _ = report(1, 1, &name_of(&target));
         return Ok(target);
     }
     // Different volume: copy fully, verify, then remove the source.
@@ -592,17 +591,18 @@ mod tests {
     }
 
     #[test]
-    fn move_same_volume_reports_done() {
+    fn move_same_volume_does_not_report_fake_bytes() {
         let d = tmp("mprog");
         fs::write(d.join("f"), b"1").unwrap();
         fs::create_dir(d.join("to")).unwrap();
-        let last = std::cell::Cell::new((0u64, 0u64));
-        move_item_reporting(&d.join("f"), &d.join("to"), "f", &|c, t, _| {
-            last.set((c, t));
+        let calls = std::cell::Cell::new(0u32);
+        move_item_reporting(&d.join("f"), &d.join("to"), "f", &|_, _, _| {
+            calls.set(calls.get() + 1);
             true
         })
         .unwrap();
-        assert_eq!(last.get(), (1, 1));
+        // A same-volume rename has no bytes to report; a fake 1-of-1 would read as "1 byte".
+        assert_eq!(calls.get(), 0);
         assert!(d.join("to/f").is_file());
         assert!(!d.join("f").exists());
         fs::remove_dir_all(d).unwrap();

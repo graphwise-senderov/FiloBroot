@@ -384,7 +384,7 @@ pub fn move_item(src: String, dest_dir: String, name: String) -> Result<String, 
     Ok(core::ops::move_item(Path::new(&src), Path::new(&dest_dir), &name)?.to_string_lossy().into_owned())
 }
 
-/// [`move_item`] plus byte progress. Same-volume moves report completion immediately;
+/// [`move_item`] plus byte progress. Same-volume moves are a rename and report nothing;
 /// cross-volume moves report the copy.
 #[uniffi::export]
 pub fn move_item_with_progress(
