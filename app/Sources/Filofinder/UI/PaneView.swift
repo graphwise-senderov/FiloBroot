@@ -2,7 +2,8 @@ import AppKit
 
 /// One side of the window: [header (split only)] / file panel / status bar.
 /// In split view the focused pane gets a ring in its tone (captools: blue
-/// left, amber right), and hovering a pane focuses it.
+/// left, amber right). Moving the pointer into a pane does not focus it;
+/// Tab and a click do (see FileManagerWindowController).
 final class PaneView: NSView {
     let side: Side
     let header: PanelHeader
@@ -12,7 +13,6 @@ final class PaneView: NSView {
     private let ring = ClickThroughView()
     /// Single pane: the ring shows while the file list (not the Explorer) has focus.
     private var singleCue = true
-    private var tracking: NSTrackingArea?
 
     init(fm: FileManagerWindowController, side: Side) {
         self.fm = fm
@@ -64,19 +64,6 @@ final class PaneView: NSView {
     func setSingleCue(_ on: Bool) {
         singleCue = on
         if !fm.splitMode { ring.isHidden = !on }
-    }
-
-
-    override func updateTrackingAreas() {
-        if let tracking { removeTrackingArea(tracking) }
-        let t = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-                               owner: self)
-        addTrackingArea(t)
-        tracking = t
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        if fm.splitMode { fm.focus(side) }
     }
 }
 

@@ -69,6 +69,8 @@ final class FileManagerWindowController: NSWindowController, NSWindowDelegate, N
     private lazy var rightWatcher = FolderWatcher { [weak self] in self?.externalChange(.right) }
     private(set) lazy var quickLook = QuickLookController(fm: self)
     private var activity: String?
+    /// Click-to-focus for split panes. Mouse-enter must not focus; this only sees mouse-up.
+    private var clickFocusMonitor: Any?
     private let split = TintSplitView()
     private let frameMonitor = FrameMonitor()
     private var frameText = ""
@@ -93,8 +95,47 @@ final class FileManagerWindowController: NSWindowController, NSWindowDelegate, N
         window.delegate = self
         buildLayout()
         registerObservers()
+        installClickFocus()
         load(leftTab)
         refreshAll()
+    }
+
+    deinit {
+        if let clickFocusMonitor { NSEvent.removeMonitor(clickFocusMonitor) }
+    }
+
+    /// A click inside a pane focuses it. The focus change is applied after the
+    /// mouse-up is delivered, so the control under the pointer still receives
+    /// the click (focusing on mouse-down would rebuild a header button before
+    /// its action fired). The file list and grid also focus in their own
+    /// mouseDown, so the ring updates as the click begins there. Hover never
+    /// reaches this.
+    private func installClickFocus() {
+        clickFocusMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp, .rightMouseUp]) { [weak self] event in
+            self?.notePaneClick(event)
+            return event
+        }
+    }
+
+    private func notePaneClick(_ event: NSEvent) {
+        guard splitMode, event.window === window else { return }
+        let point = event.locationInWindow
+        let side: Side
+        if rightPane.convert(rightPane.bounds, to: nil).contains(point) {
+            side = .right
+        } else if leftPane.convert(leftPane.bounds, to: nil).contains(point) {
+            side = .left
+        } else {
+            return
+        }
+        guard side != focused else { return }
+        // After this mouseUp is delivered, so a button under the pointer still
+        // receives it. The button's own action focuses too; this covers clicks
+        // on chrome that has no action of its own (header, status bar, search).
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.splitMode, side != self.focused else { return }
+            self.focus(side)
+        }
     }
 
     /// App-wide notifications; registered once, because buildLayout() runs
@@ -366,7 +407,8 @@ final class FileManagerWindowController: NSWindowController, NSWindowDelegate, N
         if let preview, !preview.isHidden, preview.frame.width >= 200 { previewWidth = preview.frame.width }
     }
 
-    /// Makes `side` the target of toolbar actions (click or hover, captools).
+    /// Makes `side` the pane toolbar and keyboard actions apply to.
+    /// Tab and a click inside the pane switch it; the pointer entering a pane does not.
     func focus(_ side: Side) {
         let side = splitMode ? side : .left
         guard side != focused else { return }
